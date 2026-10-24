@@ -121,6 +121,11 @@ String f(Object? o) => o as String;
     ['b.cast<String>()'],
   );
 
+  Future<void> test_cast_method_with_inferred_arguments() => lintsOn(
+    '${_bag}Bag<String> f(Bag<Object?> b) => b.cast();\n',
+    ['b.cast()'],
+  );
+
   Future<void> test_cast_method_from_typed_is_fine() =>
       assertNoDiagnostics('${_bag}Bag<num> f(Bag<int> b) => b.cast<num>();\n');
 
@@ -212,6 +217,32 @@ int f<T extends E>(T e) => switch (e) { E.a => 1, _ => 2 };
 ''',
     ['_ => 2'],
   );
+
+  Future<void> test_a_typed_catch_all_beside_null() => lintsOn(
+    '''
+enum E { a, b }
+int f(E? e) => switch (e) { E.a => 1, E _ => 2, null => 3 };
+''',
+    ['E _ => 2'],
+  );
+
+  Future<void> test_the_type_with_unchecked_fields_is_a_catch_all() => lintsOn(
+    '''
+sealed class S { int get n; }
+final class A extends S { int get n => 1; }
+final class B extends S { int get n => 2; }
+int f(S s) => switch (s) { A() => 1, S(:final n) => n };
+''',
+    ['S(:final n) => n'],
+  );
+
+  Future<void> test_a_checked_field_is_not_a_catch_all() =>
+      assertNoDiagnostics('''
+sealed class S { int get n; }
+final class A extends S { int get n => 1; }
+final class B extends S { int get n => 2; }
+int f(S s) => switch (s) { S(n: 3) => 3, A() => 1, B() => 2 };
+''');
 
   Future<void> test_a_subtype_is_not_a_catch_all() => assertNoDiagnostics('''
 sealed class S {}

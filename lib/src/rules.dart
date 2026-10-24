@@ -130,10 +130,11 @@ class _NoCast extends SimpleAstVisitor<void> {
 
   /// `.cast<R>()` on a value whose type arguments say nothing
   /// (`List<Object?>`, `Map<dynamic, dynamic>`): the same unchecked
-  /// narrowing as `as`, one element at a time.
+  /// narrowing as `as`, one element at a time. The `<R>` may be written or
+  /// inferred.
   @override
   void visitMethodInvocation(MethodInvocation node) {
-    if (node.methodName.name != 'cast' || node.typeArguments == null) return;
+    if (node.methodName.name != 'cast') return;
     final from = node.realTarget?.staticType;
     final untyped = switch (from) {
       DynamicType() => true,
@@ -222,20 +223,24 @@ class _NoDefault extends SimpleAstVisitor<void> {
     },
   };
 
-  /// An unguarded case that every value of [of] matches, however it is
-  /// spelled: `_`, `final other`, `var x`, `S()` on an `S`, or an `||` with
-  /// one of those on a side.
+  /// An unguarded case that every value of the closed type matches, however
+  /// it is spelled: `_`, `final other`, `var x`, `E _`, `S()` or `S(:final x)`
+  /// on an `S`, or an `||` or `&&` built of them. A `null` arm beside it does
+  /// not change that: the case still takes every value of the type itself.
   bool _isCatchAll(GuardedPattern g, DartType of) =>
-      g.whenClause == null && _matchesAll(g.pattern, of);
+      g.whenClause == null &&
+      _matchesAll(g.pattern, types.promoteToNonNull(of));
 
   bool _matchesAll(DartPattern p, DartType of) => switch (p) {
     WildcardPattern(:final type) => _covers(type, of),
     DeclaredVariablePattern(:final type) => _covers(type, of),
     ObjectPattern(:final type, :final fields) =>
-      fields.isEmpty && _covers(type, of),
+      _covers(type, of) && fields.every((f) => _takesAnything(f.pattern)),
     ParenthesizedPattern(:final pattern) => _matchesAll(pattern, of),
     LogicalOrPattern(:final leftOperand, :final rightOperand) =>
       _matchesAll(leftOperand, of) || _matchesAll(rightOperand, of),
+    LogicalAndPattern(:final leftOperand, :final rightOperand) =>
+      _matchesAll(leftOperand, of) && _matchesAll(rightOperand, of),
     // Each of these tests the value, or (`as`, `!`) throws for some of it. An
     // `as` to a type every value already is (`final x as S` on an S) would
     // match all, but the analyzer reports it as unnecessary_cast_pattern,
@@ -244,13 +249,19 @@ class _NoDefault extends SimpleAstVisitor<void> {
     CastPattern() ||
     ConstantPattern() ||
     ListPattern() ||
-    LogicalAndPattern() ||
     MapPattern() ||
     NullAssertPattern() ||
     NullCheckPattern() ||
     RecordPattern() ||
     RelationalPattern() => false,
   };
+
+  /// A field's pattern that checks nothing about the field: `_`, or a
+  /// variable with no type written.
+  bool _takesAnything(DartPattern p) =>
+      (p is WildcardPattern && p.type == null) ||
+      (p is DeclaredVariablePattern && p.type == null) ||
+      (p is ParenthesizedPattern && _takesAnything(p.pattern));
 
   /// Whether a pattern typed [annotation] (none: any) takes every [of].
   bool _covers(TypeAnnotation? annotation, DartType of) =>
