@@ -12,6 +12,7 @@ import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
+import 'package:analyzer/dart/element/type_system.dart';
 import 'package:analyzer/error/error.dart';
 
 /// Every rule the plugin registers.
@@ -56,8 +57,8 @@ class _NoDynamic extends SimpleAstVisitor<void> {
 
 // ---------------------------------------------------------------- casts
 
-/// `as` on a value whose type says nothing: `dynamic`, `Object?`, a type
-/// parameter bounded by one, or a generic whose arguments are one
+/// `as` on a value whose type says nothing: `dynamic`, `Object` or `Object?`,
+/// a type parameter bounded by one, or a generic whose arguments are one
 /// (`List<Object?>`). That is what JSON, a map lookup, an isolate message and
 /// `ProcessResult.stdout` arrive as.
 ///
@@ -90,46 +91,71 @@ class NoCastFromUntyped extends AnalysisRule {
 }
 
 /// Whether [t] carries no type information a reader can rely on.
-bool _untyped(DartType t) => switch (t) {
-  DynamicType() => true,
-  TypeParameterType(:final bound) => _untyped(bound),
-  InterfaceType(:final typeArguments) =>
-    t.isDartCoreObject || typeArguments.any(_untyped),
-  _ => false,
-};
+///
+/// [seen] holds the type parameters already being looked through, so a bound
+/// that leads back to its own parameter (`T extends Comparable<T>`) ends
+/// instead of recursing: a parameter met again adds nothing new.
+bool _untyped(DartType t, [Set<TypeParameterElement> seen = const {}]) =>
+    switch (t) {
+      DynamicType() => true,
+      TypeParameterType(:final element, :final bound) =>
+        !seen.contains(element) && _untyped(bound, {...seen, element}),
+      InterfaceType(:final typeArguments) =>
+        t.isDartCoreObject || typeArguments.any((a) => _untyped(a, seen)),
+      _ => false,
+    };
 
-/// `cast-ok:` followed by a reason.
-final _castOk = RegExp(r'cast-ok:\s*\S');
+/// A `// cast-ok:` comment followed by a reason.
+final _castOk = RegExp(r'^//\s*cast-ok:\s*\S');
 
 class _NoCast extends SimpleAstVisitor<void> {
   _NoCast(this.rule, this.context);
   final AnalysisRule rule;
   final RuleContext context;
 
+  /// The lines (0-based) of the unit [_linesOf] that hold a `cast-ok:`
+  /// comment, found once per unit.
+  CompilationUnit? _linesOf;
+  Set<int> _okLines = const {};
+
   @override
   void visitAsExpression(AsExpression node) {
     final from = node.expression.staticType;
     if (from == null || !_untyped(from)) return;
-    if (_hasReason(node.asOperator.offset)) return;
+    if (_hasReason(node)) return;
     rule.reportAtNode(node);
   }
 
-  /// Whether the line holding [offset], or the line above it, says
-  /// `cast-ok: <why>`.
-  bool _hasReason(int offset) {
-    final unit = context.currentUnit;
-    if (unit == null) return false;
-    final lines = unit.unit.lineInfo;
-    final line = lines.getLocation(offset).lineNumber - 1;
-    for (final n in [line, line - 1]) {
-      if (n < 0) continue;
-      final start = lines.getOffsetOfLine(n);
-      final end = n + 1 < lines.lineCount
-          ? lines.getOffsetOfLine(n + 1)
-          : unit.content.length;
-      if (_castOk.hasMatch(unit.content.substring(start, end))) return true;
+  /// Whether the line holding [node]'s `as`, or the line above it, has a
+  /// `// cast-ok: <why>` comment. Comments are read as tokens, so the words
+  /// in a string literal are not one.
+  bool _hasReason(AsExpression node) {
+    final unit = node.root;
+    if (unit is! CompilationUnit) return false;
+    if (!identical(unit, _linesOf)) {
+      _linesOf = unit;
+      _okLines = {
+        for (final c in _comments(unit))
+          if (_castOk.hasMatch(c.lexeme))
+            unit.lineInfo.getLocation(c.offset).lineNumber - 1,
+      };
     }
-    return false;
+    final line =
+        unit.lineInfo.getLocation(node.asOperator.offset).lineNumber - 1;
+    return _okLines.contains(line) || _okLines.contains(line - 1);
+  }
+}
+
+/// Every comment in [unit]. Comments hang off the token after them; the ones
+/// at the end of the file hang off EOF, which the walk reaches last.
+Iterable<Token> _comments(CompilationUnit unit) sync* {
+  Token? t = unit.beginToken;
+  while (true) {
+    for (Token? c = t?.precedingComments; c != null; c = c.next) {
+      yield c;
+    }
+    if (t == null || t.isEof) return;
+    t = t.next;
   }
 }
 
@@ -156,15 +182,16 @@ class NoDefaultOnClosedType extends AnalysisRule {
   @override
   void registerNodeProcessors(RuleVisitorRegistry r, RuleContext c) {
     if (c.isInTestDirectory) return;
-    final v = _NoDefault(this);
+    final v = _NoDefault(this, c.typeSystem);
     r.addSwitchStatement(this, v);
     r.addSwitchExpression(this, v);
   }
 }
 
 class _NoDefault extends SimpleAstVisitor<void> {
-  _NoDefault(this.rule);
+  _NoDefault(this.rule, this.types);
   final AnalysisRule rule;
+  final TypeSystem types;
 
   /// The enum or sealed class [t] is, by name; null when it is open.
   String? _closed(DartType? t) => switch (t?.element) {
@@ -173,16 +200,48 @@ class _NoDefault extends SimpleAstVisitor<void> {
     _ => null,
   };
 
-  bool _isCatchAll(GuardedPattern g) =>
-      g.whenClause == null && g.pattern is WildcardPattern;
+  /// An unguarded case that every value of [of] matches, however it is
+  /// spelled: `_`, `final other`, `var x`, `S()` on an `S`, or an `||` with
+  /// one of those on a side.
+  bool _isCatchAll(GuardedPattern g, DartType of) =>
+      g.whenClause == null && _matchesAll(g.pattern, of);
+
+  bool _matchesAll(DartPattern p, DartType of) => switch (p) {
+    WildcardPattern(:final type) => _covers(type, of),
+    DeclaredVariablePattern(:final type) => _covers(type, of),
+    ObjectPattern(:final type, :final fields) =>
+      fields.isEmpty && _covers(type, of),
+    ParenthesizedPattern(:final pattern) => _matchesAll(pattern, of),
+    LogicalOrPattern(:final leftOperand, :final rightOperand) =>
+      _matchesAll(leftOperand, of) || _matchesAll(rightOperand, of),
+    // Each of these tests the value, or (`as`, `!`) throws for some of it.
+    AssignedVariablePattern() ||
+    CastPattern() ||
+    ConstantPattern() ||
+    ListPattern() ||
+    LogicalAndPattern() ||
+    MapPattern() ||
+    NullAssertPattern() ||
+    NullCheckPattern() ||
+    RecordPattern() ||
+    RelationalPattern() => false,
+  };
+
+  /// Whether a pattern typed [annotation] (none: any) takes every [of].
+  bool _covers(TypeAnnotation? annotation, DartType of) =>
+      switch (annotation?.type) {
+        null => annotation == null,
+        final t => types.isSubtypeOf(of, t),
+      };
 
   @override
   void visitSwitchStatement(SwitchStatement node) {
-    final closed = _closed(node.expression.staticType);
-    if (closed == null) return;
+    final of = node.expression.staticType;
+    final closed = _closed(of);
+    if (of == null || closed == null) return;
     for (final m in node.members) {
       if (m is SwitchDefault ||
-          (m is SwitchPatternCase && _isCatchAll(m.guardedPattern))) {
+          (m is SwitchPatternCase && _isCatchAll(m.guardedPattern, of))) {
         rule.reportAtNode(m, arguments: [closed]);
       }
     }
@@ -190,10 +249,11 @@ class _NoDefault extends SimpleAstVisitor<void> {
 
   @override
   void visitSwitchExpression(SwitchExpression node) {
-    final closed = _closed(node.expression.staticType);
-    if (closed == null) return;
+    final of = node.expression.staticType;
+    final closed = _closed(of);
+    if (of == null || closed == null) return;
     for (final c in node.cases) {
-      if (_isCatchAll(c.guardedPattern)) {
+      if (_isCatchAll(c.guardedPattern, of)) {
         rule.reportAtNode(c, arguments: [closed]);
       }
     }
@@ -232,15 +292,8 @@ class _NoIgnore extends SimpleAstVisitor<void> {
 
   @override
   void visitCompilationUnit(CompilationUnit node) {
-    // Comments hang off the token after them; the ones at the end of the
-    // file hang off EOF, which the loop stops at, so it is checked last.
-    Token? t = node.beginToken;
-    while (true) {
-      for (Token? c = t?.precedingComments; c != null; c = c.next) {
-        if (_ignore.hasMatch(c.lexeme)) rule.reportAtToken(c);
-      }
-      if (t == null || t.isEof) break;
-      t = t.next;
+    for (final c in _comments(node)) {
+      if (_ignore.hasMatch(c.lexeme)) rule.reportAtToken(c);
     }
   }
 }

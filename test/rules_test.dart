@@ -112,6 +112,17 @@ String f(Object? o) => o as String;
     ['o as String'],
   );
 
+  Future<void> test_a_reason_in_a_string_is_not_a_comment() => lintsOn(
+    "String f(Object? o) => [o as String, 'cast-ok: in a string'].first;\n",
+    ['o as String'],
+  );
+
+  // T extends Comparable<T> leads back to T: the walk over bounds must end.
+  Future<void> test_a_recursive_bound_is_typed() => assertNoDiagnostics(
+    'int f<T extends Comparable<T>>(T a, Comparable<T> b) =>\n'
+    '    (b as T).compareTo(a);\n',
+  );
+
   Future<void> test_not_in_test_dir() =>
       silentInTestDir('String f(Object? o) => o as String;\n');
 }
@@ -156,7 +167,32 @@ int f(S s) => switch (s) { A() => 1, _ => 2 };
 
   Future<void> test_a_guarded_wildcard_is_fine() => assertNoDiagnostics('''
 enum E { a, b }
-int f(E e, bool c) => switch (e) { E.a when c => 1, E.a => 2, E.b => 3 };
+int f(E e, bool c) => switch (e) { _ when c => 0, E.a => 1, E.b => 2 };
+''');
+
+  Future<void> test_a_bare_variable_is_a_catch_all() => lintsOn(
+    '''
+enum E { a, b }
+int f(E e) => switch (e) { E.a => 1, final other => 2 };
+''',
+    ['final other => 2'],
+  );
+
+  Future<void> test_the_type_itself_is_a_catch_all() => lintsOn(
+    '''
+sealed class S {}
+final class A extends S {}
+final class B extends S {}
+int f(S s) => switch (s) { A() => 1, S() => 2 };
+''',
+    ['S() => 2'],
+  );
+
+  Future<void> test_a_subtype_is_not_a_catch_all() => assertNoDiagnostics('''
+sealed class S {}
+final class A extends S {}
+final class B extends S {}
+int f(S s) => switch (s) { A() => 1, B() => 2 };
 ''');
 
   Future<void> test_a_wildcard_on_an_open_type_is_fine() => assertNoDiagnostics(
