@@ -67,7 +67,7 @@ class _NoDynamic extends SimpleAstVisitor<void> {
 class NoCastFromUntyped extends AnalysisRule {
   static const code = LintCode(
     'no_cast_from_untyped',
-    'Narrowing an untyped value with `as`.',
+    'Narrowing an untyped value with `as` or `.cast`.',
     correctionMessage:
         'Use a pattern (`case final String s`) or JsonFields, which name the '
         'field when it is wrong. If a cast is really right here, write '
@@ -297,7 +297,7 @@ class NoIgnoreComment extends AnalysisRule {
   );
 
   NoIgnoreComment()
-    : super(name: 'no_ignore_comment', description: 'No // ignore:.');
+    : super(name: 'no_ignore_comment', description: 'No ignore comments.');
 
   @override
   LintCode get diagnosticCode => code;
