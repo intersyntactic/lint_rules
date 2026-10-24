@@ -98,6 +98,14 @@ String h<T extends String?>(T t) => t as String;
 String f(Object? o) => o as String;
 ''');
 
+  Future<void> test_a_marker_after_code_covers_only_its_line() => lintsOn(
+    '''
+String f(Object? o) => o as String; // cast-ok: the SDK types it so
+String g(Object? p) => p as String;
+''',
+    ['p as String'],
+  );
+
   Future<void> test_a_marker_needs_a_reason() => lintsOn(
     'String f(Object? o) => o as String; // cast-ok:\n',
     ['o as String'],
@@ -279,9 +287,19 @@ void f() {}
     ['// ignore_for_file: lint_rules/no_dynamic'],
   );
 
+  Future<void> test_a_doc_comment_ignore_is_one() => lintsOn(
+    '''
+/// ignore: lint_rules/no_dynamic
+void f() {}
+////ignore: lint_rules/no_dynamic
+void g() {}
+''',
+    ['/// ignore: lint_rules/no_dynamic', '////ignore: lint_rules/no_dynamic'],
+  );
+
   Future<void> test_other_comments_are_fine() => assertNoDiagnostics('''
 // Do not ignore: this is prose.
-/// ignore: a doc comment is not a suppression
+/// Words about an `// ignore:` are not one.
 void f() {}
 ''');
 

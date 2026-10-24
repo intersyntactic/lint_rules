@@ -115,8 +115,8 @@ class _NoCast extends SimpleAstVisitor<void> {
   final AnalysisRule rule;
   final RuleContext context;
 
-  /// The lines (0-based) of the unit [_linesOf] that hold a `cast-ok:`
-  /// comment, found once per unit.
+  /// The lines (0-based) of the unit [_linesOf] that a `cast-ok:` comment
+  /// covers, found once per unit.
   CompilationUnit? _linesOf;
   Set<int> _okLines = const {};
 
@@ -146,32 +146,42 @@ class _NoCast extends SimpleAstVisitor<void> {
     rule.reportAtNode(node);
   }
 
-  /// Whether the line holding [offset] in [node]'s unit, or the line above
-  /// it, has a `// cast-ok: <why>` comment. Comments are read as tokens, so
+  /// Whether a `// cast-ok: <why>` comment covers the line holding [offset]
+  /// in [node]'s unit: one at the end of that line, or one on a line of its
+  /// own just above it. A marker after code covers only its own line, so it
+  /// says nothing about the cast below it. Comments are read as tokens, so
   /// the words in a string literal are not one.
   bool _hasReason(AstNode node, int offset) {
     final unit = node.root;
     if (unit is! CompilationUnit) return false;
+    int lineOf(int offset) => unit.lineInfo.getLocation(offset).lineNumber - 1;
     if (!identical(unit, _linesOf)) {
       _linesOf = unit;
       _okLines = {
-        for (final c in _comments(unit))
-          if (_castOk.hasMatch(c.lexeme))
-            unit.lineInfo.getLocation(c.offset).lineNumber - 1,
+        for (final (:comment, :before) in _comments(unit))
+          if (_castOk.hasMatch(comment.lexeme)) ...[
+            lineOf(comment.offset),
+            if (before == null || lineOf(before.end) < lineOf(comment.offset))
+              lineOf(comment.offset) + 1,
+          ],
       };
     }
-    final line = unit.lineInfo.getLocation(offset).lineNumber - 1;
-    return _okLines.contains(line) || _okLines.contains(line - 1);
+    return _okLines.contains(lineOf(offset));
   }
 }
 
-/// Every comment in [unit]. Comments hang off the token after them; the ones
-/// at the end of the file hang off EOF, which the walk reaches last.
-Iterable<Token> _comments(CompilationUnit unit) sync* {
+/// Every comment in [unit], with the code token [before] it (null at the
+/// start of the file). Comments hang off the token after them; the ones at
+/// the end of the file hang off EOF, which the walk reaches last.
+Iterable<({Token comment, Token? before})> _comments(
+  CompilationUnit unit,
+) sync* {
   Token? t = unit.beginToken;
   while (true) {
+    final previous = t?.previous;
+    final before = previous == null || previous.isEof ? null : previous;
     for (Token? c = t?.precedingComments; c != null; c = c.next) {
-      yield c;
+      yield (comment: c, before: before);
     }
     if (t == null || t.isEof) return;
     t = t.next;
@@ -320,7 +330,9 @@ class NoIgnoreComment extends AnalysisRule {
   }
 }
 
-final _ignore = RegExp(r'^//\s*ignore(_for_file)?\s*:');
+/// The analyzer obeys `//+ *ignore:` at the start of a comment, so a doc
+/// comment (`/// ignore:`) is one too.
+final _ignore = RegExp(r'^//+\s*ignore(_for_file)?\s*:');
 
 class _NoIgnore extends SimpleAstVisitor<void> {
   _NoIgnore(this.rule);
@@ -328,8 +340,8 @@ class _NoIgnore extends SimpleAstVisitor<void> {
 
   @override
   void visitCompilationUnit(CompilationUnit node) {
-    for (final c in _comments(node)) {
-      if (_ignore.hasMatch(c.lexeme)) rule.reportAtToken(c);
+    for (final (:comment, before: _) in _comments(node)) {
+      if (_ignore.hasMatch(comment.lexeme)) rule.reportAtToken(comment);
     }
   }
 }

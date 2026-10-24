@@ -6,6 +6,7 @@
 library;
 
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:lint_rules/src/rules.dart';
 import 'package:test/test.dart';
@@ -17,12 +18,19 @@ const _optionsFiles = [
   '../intersyntactic_app/analysis_options.yaml',
 ];
 
+/// This package's directory, found from its own library rather than from
+/// where the test was started.
+final _package = File.fromUri(
+  Isolate.resolvePackageUriSync(Uri.parse('package:lint_rules/main.dart'))!,
+).parent.parent;
+
 void main() {
   final registered = {for (final r in rules) r.name};
 
   for (final path in _optionsFiles) {
     test('$path names every rule, and only those', () {
-      final diagnostics = switch (loadYaml(File(path).readAsStringSync())) {
+      final file = File(_package.uri.resolve(path).toFilePath());
+      final diagnostics = switch (loadYaml(file.readAsStringSync())) {
         {
           'plugins': {
             'lint_rules': {'diagnostics': final Map<Object?, Object?> d},
