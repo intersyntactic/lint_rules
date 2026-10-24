@@ -112,6 +112,23 @@ String f(Object? o) => o as String;
     ['o as String'],
   );
 
+  // The test SDK's List has no `cast`, so a class of the same shape stands
+  // in for List.cast and Map.cast.
+  static const _bag = 'class Bag<T> { Bag<R> cast<R>() => Bag<R>(); }\n';
+
+  Future<void> test_cast_method_from_untyped() => lintsOn(
+    '${_bag}Bag<String> f(Bag<Object?> b) => b.cast<String>();\n',
+    ['b.cast<String>()'],
+  );
+
+  Future<void> test_cast_method_from_typed_is_fine() =>
+      assertNoDiagnostics('${_bag}Bag<num> f(Bag<int> b) => b.cast<num>();\n');
+
+  Future<void> test_cast_method_with_a_reason() => assertNoDiagnostics(
+    '${_bag}Bag<String> f(Bag<Object?> b) =>\n'
+    '    b.cast<String>(); // cast-ok: test\n',
+  );
+
   Future<void> test_a_reason_in_a_string_is_not_a_comment() => lintsOn(
     "String f(Object? o) => [o as String, 'cast-ok: in a string'].first;\n",
     ['o as String'],
@@ -186,6 +203,14 @@ final class B extends S {}
 int f(S s) => switch (s) { A() => 1, S() => 2 };
 ''',
     ['S() => 2'],
+  );
+
+  Future<void> test_a_closed_type_behind_a_parameter() => lintsOn(
+    '''
+enum E { a, b }
+int f<T extends E>(T e) => switch (e) { E.a => 1, _ => 2 };
+''',
+    ['_ => 2'],
   );
 
   Future<void> test_a_subtype_is_not_a_catch_all() => assertNoDiagnostics('''

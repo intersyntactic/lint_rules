@@ -86,7 +86,9 @@ class NoCastFromUntyped extends AnalysisRule {
   @override
   void registerNodeProcessors(RuleVisitorRegistry r, RuleContext c) {
     if (c.isInTestDirectory) return;
-    r.addAsExpression(this, _NoCast(this, c));
+    final v = _NoCast(this, c);
+    r.addAsExpression(this, v);
+    r.addMethodInvocation(this, v);
   }
 }
 
@@ -122,14 +124,31 @@ class _NoCast extends SimpleAstVisitor<void> {
   void visitAsExpression(AsExpression node) {
     final from = node.expression.staticType;
     if (from == null || !_untyped(from)) return;
-    if (_hasReason(node)) return;
+    if (_hasReason(node, node.asOperator.offset)) return;
     rule.reportAtNode(node);
   }
 
-  /// Whether the line holding [node]'s `as`, or the line above it, has a
-  /// `// cast-ok: <why>` comment. Comments are read as tokens, so the words
-  /// in a string literal are not one.
-  bool _hasReason(AsExpression node) {
+  /// `.cast<R>()` on a value whose type arguments say nothing
+  /// (`List<Object?>`, `Map<dynamic, dynamic>`): the same unchecked
+  /// narrowing as `as`, one element at a time.
+  @override
+  void visitMethodInvocation(MethodInvocation node) {
+    if (node.methodName.name != 'cast' || node.typeArguments == null) return;
+    final from = node.realTarget?.staticType;
+    final untyped = switch (from) {
+      DynamicType() => true,
+      InterfaceType(:final typeArguments) => typeArguments.any(_untyped),
+      _ => false,
+    };
+    if (!untyped) return;
+    if (_hasReason(node, node.methodName.offset)) return;
+    rule.reportAtNode(node);
+  }
+
+  /// Whether the line holding [offset] in [node]'s unit, or the line above
+  /// it, has a `// cast-ok: <why>` comment. Comments are read as tokens, so
+  /// the words in a string literal are not one.
+  bool _hasReason(AstNode node, int offset) {
     final unit = node.root;
     if (unit is! CompilationUnit) return false;
     if (!identical(unit, _linesOf)) {
@@ -140,8 +159,7 @@ class _NoCast extends SimpleAstVisitor<void> {
             unit.lineInfo.getLocation(c.offset).lineNumber - 1,
       };
     }
-    final line =
-        unit.lineInfo.getLocation(node.asOperator.offset).lineNumber - 1;
+    final line = unit.lineInfo.getLocation(offset).lineNumber - 1;
     return _okLines.contains(line) || _okLines.contains(line - 1);
   }
 }
@@ -193,11 +211,15 @@ class _NoDefault extends SimpleAstVisitor<void> {
   final AnalysisRule rule;
   final TypeSystem types;
 
-  /// The enum or sealed class [t] is, by name; null when it is open.
-  String? _closed(DartType? t) => switch (t?.element) {
-    final EnumElement e => 'enum ${e.name}',
-    final ClassElement c when c.isSealed => 'sealed ${c.name}',
-    _ => null,
+  /// The enum or sealed class [t] is, by name; null when it is open. A type
+  /// parameter is what its bound is: `T extends E` is closed when `E` is.
+  String? _closed(DartType? t) => switch (t) {
+    TypeParameterType(:final bound) => _closed(bound),
+    _ => switch (t?.element) {
+      final EnumElement e => 'enum ${e.name}',
+      final ClassElement c when c.isSealed => 'sealed ${c.name}',
+      _ => null,
+    },
   };
 
   /// An unguarded case that every value of [of] matches, however it is
@@ -214,7 +236,10 @@ class _NoDefault extends SimpleAstVisitor<void> {
     ParenthesizedPattern(:final pattern) => _matchesAll(pattern, of),
     LogicalOrPattern(:final leftOperand, :final rightOperand) =>
       _matchesAll(leftOperand, of) || _matchesAll(rightOperand, of),
-    // Each of these tests the value, or (`as`, `!`) throws for some of it.
+    // Each of these tests the value, or (`as`, `!`) throws for some of it. An
+    // `as` to a type every value already is (`final x as S` on an S) would
+    // match all, but the analyzer reports it as unnecessary_cast_pattern,
+    // which --fatal-infos fails, so it is not counted twice here.
     AssignedVariablePattern() ||
     CastPattern() ||
     ConstantPattern() ||
