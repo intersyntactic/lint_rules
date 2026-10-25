@@ -395,6 +395,11 @@ List<bool> tryParseAll(List<String> l) => [for (final s in l) s == 'on'];
 bool Function(String) parseFlag() => (s) => s == 'yes';
 ''');
 
+  Future<void> test_a_private_parse_is_the_wire() => assertNoDiagnostics(
+    "bool? _parseFlag(String s) => s == 'on' ? true : null;\n"
+    "class C { static int? __parseLevel(String s) => s == 'high' ? 2 : null; }\n",
+  );
+
   Future<void> test_a_wire_word_inside_a_name_is_not_one() => lintsOn(
     "bool isMention(String kind) => kind == 'mention';\n",
     ["kind == 'mention'"],

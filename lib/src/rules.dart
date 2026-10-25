@@ -401,11 +401,14 @@ class NoStringLiteralCompare extends AnalysisRule {
 /// A `// wire-ok:` comment followed by a reason.
 final _wireOk = RegExp(r'^//\s*wire-ok:\s*\S');
 
-/// Whether a member named [name] turns wire text into types or back.
-bool _isWireMember(String name) =>
-    const {'fromJson', 'toJson', 'fromWire', 'toWire'}.contains(name) ||
-    name.startsWith('parse') ||
-    name.startsWith('tryParse');
+/// Whether a member named [name] turns wire text into types or back. A
+/// leading `_` says who may call it, not what it does: `_parseArgs` is one.
+bool _isWireMember(String name) {
+  final role = name.replaceFirst(RegExp('^_+'), '');
+  return const {'fromJson', 'toJson', 'fromWire', 'toWire'}.contains(role) ||
+      role.startsWith('parse') ||
+      role.startsWith('tryParse');
+}
 
 /// Whether [node] sits inside a wire member, at any depth.
 bool _inWireMember(AstNode node) {
