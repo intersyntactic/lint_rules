@@ -1,4 +1,5 @@
-/// The rules of AGENTS.md's "Writing Dart" that a plugin can check.
+/// The rules of AGENTS.md's "Writing Dart" that a plugin can check, or the
+/// part of one it can see.
 ///
 /// None of them report in a package's test directories (`test/`,
 /// `integration_test/`, `test_driver/`): see RULINGS.md.
@@ -21,6 +22,7 @@ final List<AnalysisRule> rules = [
   NoCastFromUntyped(),
   NoDefaultOnClosedType(),
   NoIgnoreComment(),
+  NoStringLiteralCompare(),
 ];
 
 // ---------------------------------------------------------------- dynamic
@@ -114,17 +116,13 @@ class _NoCast extends SimpleAstVisitor<void> {
   _NoCast(this.rule, this.context);
   final AnalysisRule rule;
   final RuleContext context;
-
-  /// The lines (0-based) of the unit [_linesOf] that a `cast-ok:` comment
-  /// covers, found once per unit.
-  CompilationUnit? _linesOf;
-  Set<int> _okLines = const {};
+  final _reasons = _Reasons(_castOk);
 
   @override
   void visitAsExpression(AsExpression node) {
     final from = node.expression.staticType;
     if (from == null || !_untyped(from)) return;
-    if (_hasReason(node, node.asOperator.offset)) return;
+    if (_reasons.cover(node, node.asOperator.offset)) return;
     rule.reportAtNode(node);
   }
 
@@ -142,16 +140,28 @@ class _NoCast extends SimpleAstVisitor<void> {
       _ => false,
     };
     if (!untyped) return;
-    if (_hasReason(node, node.methodName.offset)) return;
+    if (_reasons.cover(node, node.methodName.offset)) return;
     rule.reportAtNode(node);
   }
+}
 
-  /// Whether a `// cast-ok: <why>` comment covers the line holding [offset]
-  /// in [node]'s unit: one at the end of that line, or one on a line of its
-  /// own just above it. A marker after code covers only its own line, so it
-  /// says nothing about the cast below it. Comments are read as tokens, so
-  /// the words in a string literal are not one.
-  bool _hasReason(AstNode node, int offset) {
+/// The comments matching [marker] (a `cast-ok:` or `wire-ok:` with a reason),
+/// and the lines each one covers.
+class _Reasons {
+  _Reasons(this.marker);
+  final RegExp marker;
+
+  /// The lines (0-based) of the unit [_linesOf] that a marker covers, found
+  /// once per unit.
+  CompilationUnit? _linesOf;
+  Set<int> _okLines = const {};
+
+  /// Whether a marker covers the line holding [offset] in [node]'s unit: one
+  /// at the end of that line, or one on a line of its own just above it. A
+  /// marker after code covers only its own line, so it says nothing about the
+  /// code below it. Comments are read as tokens, so the words in a string
+  /// literal are not one.
+  bool cover(AstNode node, int offset) {
     final unit = node.root;
     if (unit is! CompilationUnit) return false;
     int lineOf(int offset) => unit.lineInfo.getLocation(offset).lineNumber - 1;
@@ -159,7 +169,7 @@ class _NoCast extends SimpleAstVisitor<void> {
       _linesOf = unit;
       _okLines = {
         for (final (:comment, :before) in _comments(unit))
-          if (_castOk.hasMatch(comment.lexeme)) ...[
+          if (marker.hasMatch(comment.lexeme)) ...[
             lineOf(comment.offset),
             if (before == null || lineOf(before.end) < lineOf(comment.offset))
               lineOf(comment.offset) + 1,
@@ -344,4 +354,153 @@ class _NoIgnore extends SimpleAstVisitor<void> {
       if (_ignore.hasMatch(comment.lexeme)) rule.reportAtToken(comment);
     }
   }
+}
+
+// ---------------------------------------------------------------- strings
+
+/// A string compared with a string literal: `kind == 'mention'`, or a switch
+/// whose cases are string literals. The literals are a closed set's values
+/// spelled as strings, so the set has no type to switch on exhaustively.
+///
+/// The value compared may be a `String`, or untyped (`Object?`, `dynamic`):
+/// `json['type'] == 'error'` is the same set, read from the wire too late.
+///
+/// Not reported: inside the members that ARE the wire (`fromJson`, `toJson`,
+/// `fromWire`, `toWire`, and any `parse…` or `tryParse…`, closures within them
+/// included), against `''` (a test for empty, not a set), or with a
+/// `// wire-ok: <why>` on its line or the line above.
+class NoStringLiteralCompare extends AnalysisRule {
+  static const code = LintCode(
+    'no_string_literal_compare',
+    "Comparing a string with '{0}': a closed set spelled as strings.",
+    correctionMessage:
+        'Give the set a type (an enum, a sealed class or an extension type) '
+        'and parse it once, in fromJson or a parse. If this is the wire, write '
+        '`// wire-ok: <why>` on or above the line.',
+  );
+
+  NoStringLiteralCompare()
+    : super(
+        name: 'no_string_literal_compare',
+        description: 'No string compared with a string literal.',
+      );
+
+  @override
+  LintCode get diagnosticCode => code;
+
+  @override
+  void registerNodeProcessors(RuleVisitorRegistry r, RuleContext c) {
+    if (c.isInTestDirectory) return;
+    final v = _NoStringCompare(this);
+    r.addBinaryExpression(this, v);
+    r.addSwitchStatement(this, v);
+    r.addSwitchExpression(this, v);
+  }
+}
+
+/// A `// wire-ok:` comment followed by a reason.
+final _wireOk = RegExp(r'^//\s*wire-ok:\s*\S');
+
+/// Whether a member named [name] turns wire text into types or back.
+bool _isWireMember(String name) =>
+    const {'fromJson', 'toJson', 'fromWire', 'toWire'}.contains(name) ||
+    name.startsWith('parse') ||
+    name.startsWith('tryParse');
+
+/// Whether [node] sits inside a wire member, at any depth.
+bool _inWireMember(AstNode node) {
+  for (AstNode? p = node.parent; p != null; p = p.parent) {
+    final name = switch (p) {
+      MethodDeclaration(:final name) => name.lexeme,
+      FunctionDeclaration(:final name) => name.lexeme,
+      ConstructorDeclaration(:final name?) => name.lexeme,
+      _ => null,
+    };
+    if (name != null && _isWireMember(name)) return true;
+  }
+  return false;
+}
+
+/// A type a string-valued set arrives as: `String`, or one that says nothing.
+bool _stringOrUntyped(DartType? t) => switch (t) {
+  DynamicType() => true,
+  InterfaceType() => t.isDartCoreString || t.isDartCoreObject,
+  _ => false,
+};
+
+/// The value of [e] when it is a string literal other than `''`.
+String? _setLiteral(Expression e) => switch (e) {
+  StringLiteral(:final stringValue?) when stringValue.isNotEmpty => stringValue,
+  ParenthesizedExpression(:final expression) => _setLiteral(expression),
+  _ => null,
+};
+
+/// The first non-empty string literal a case pattern matches, through `||`.
+String? _literalCase(DartPattern p) => switch (p) {
+  ConstantPattern(:final expression) => _setLiteral(expression),
+  ParenthesizedPattern(:final pattern) => _literalCase(pattern),
+  LogicalOrPattern(:final leftOperand, :final rightOperand) =>
+    _literalCase(leftOperand) ?? _literalCase(rightOperand),
+  // A map or list pattern's literals are keys and elements of the wire
+  // shape, which the rule leaves to fromJson; the rest test no string value.
+  AssignedVariablePattern() ||
+  CastPattern() ||
+  DeclaredVariablePattern() ||
+  ListPattern() ||
+  LogicalAndPattern() ||
+  MapPattern() ||
+  NullAssertPattern() ||
+  NullCheckPattern() ||
+  ObjectPattern() ||
+  RecordPattern() ||
+  RelationalPattern() ||
+  WildcardPattern() => null,
+};
+
+class _NoStringCompare extends SimpleAstVisitor<void> {
+  _NoStringCompare(this.rule);
+  final AnalysisRule rule;
+  final _reasons = _Reasons(_wireOk);
+
+  void _report(AstNode at, String literal) {
+    if (_inWireMember(at) || _reasons.cover(at, at.offset)) return;
+    rule.reportAtNode(at, arguments: [literal]);
+  }
+
+  @override
+  void visitBinaryExpression(BinaryExpression node) {
+    final op = node.operator.type;
+    if (op != TokenType.EQ_EQ && op != TokenType.BANG_EQ) return;
+    final (value, literal) = switch ((
+      _setLiteral(node.leftOperand),
+      _setLiteral(node.rightOperand),
+    )) {
+      (final String l, null) => (node.rightOperand, l),
+      (null, final String r) => (node.leftOperand, r),
+      _ => (null, null),
+    };
+    if (value == null || literal == null) return;
+    if (!_stringOrUntyped(value.staticType)) return;
+    _report(node, literal);
+  }
+
+  /// One report per switch, at what it switches on: the cases are one set.
+  void _switch(Expression on, Iterable<DartPattern> cases) {
+    if (!_stringOrUntyped(on.staticType)) return;
+    for (final p in cases) {
+      if (_literalCase(p) case final literal?) return _report(on, literal);
+    }
+  }
+
+  @override
+  void visitSwitchStatement(SwitchStatement node) => _switch(node.expression, [
+    for (final m in node.members)
+      if (m is SwitchPatternCase) m.guardedPattern.pattern,
+  ]);
+
+  @override
+  void visitSwitchExpression(SwitchExpression node) => _switch(
+    node.expression,
+    [for (final c in node.cases) c.guardedPattern.pattern],
+  );
 }

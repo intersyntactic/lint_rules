@@ -9,6 +9,7 @@ void main() {
     defineReflectiveTests(NoCastFromUntypedTest);
     defineReflectiveTests(NoDefaultOnClosedTypeTest);
     defineReflectiveTests(NoIgnoreCommentTest);
+    defineReflectiveTests(NoStringLiteralCompareTest);
   });
 }
 
@@ -304,4 +305,119 @@ void f() {}
 ''');
 
   Future<void> test_not_in_test_dir() => silentInTestDir(_middle);
+}
+
+@reflectiveTest
+class NoStringLiteralCompareTest extends _RuleTest {
+  @override
+  AbstractAnalysisRule get underTest => NoStringLiteralCompare();
+
+  static const _equals = "bool f(String kind) => kind == 'mention';\n";
+
+  Future<void> test_equals_a_literal() =>
+      lintsOn(_equals, ["kind == 'mention'"]);
+
+  Future<void> test_not_equals_with_the_literal_first() => lintsOn(
+    "bool f(String kind) => 'mention' != kind;\n",
+    ["'mention' != kind"],
+  );
+
+  Future<void> test_an_untyped_value() => lintsOn(
+    "bool f(Map<String, Object?> j) => j['type'] == 'error';\n",
+    ["j['type'] == 'error'"],
+  );
+
+  Future<void> test_a_nullable_string() => lintsOn(
+    "bool f(String? kind) => kind == 'mention';\n",
+    ["kind == 'mention'"],
+  );
+
+  Future<void> test_empty_is_not_a_set() =>
+      assertNoDiagnostics("bool f(String s) => s == '';\n");
+
+  Future<void> test_two_strings_with_no_literal_are_fine() =>
+      assertNoDiagnostics('bool f(String a, String b) => a == b;\n');
+
+  Future<void> test_a_literal_against_a_typed_value_is_fine() =>
+      assertNoDiagnostics('''
+class K { const K(); }
+bool f(K k) => k == const K();
+bool g(int n) => n == 1;
+''');
+
+  static const _switchStatement = '''
+String id(String s) => s;
+int f(String kind) {
+  switch (id(kind)) {
+    case 'a':
+      return 1;
+    case 'b':
+      return 2;
+  }
+  return 0;
+}
+''';
+
+  Future<void> test_a_switch_statement_is_one_report() =>
+      lintsOn(_switchStatement, ['id(kind)']);
+
+  Future<void> test_a_switch_expression() => lintsOn(
+    "String id(String s) => s;\n"
+    "int f(String k) => switch (id(k)) { 'a' || 'b' => 1, _ => 0 };\n",
+    ['id(k)'],
+  );
+
+  Future<void>
+  test_a_switch_with_no_literal_case_is_fine() => assertNoDiagnostics(
+    'int f(String k) => switch (k) { final s when s.isEmpty => 0, _ => 1 };\n',
+  );
+
+  Future<void> test_a_switch_on_an_enum_is_fine() => assertNoDiagnostics('''
+enum E { a, b }
+int f(E e) => switch (e) { E.a => 1, E.b => 2 };
+''');
+
+  Future<void> test_from_json_is_the_wire() => assertNoDiagnostics('''
+enum Kind {
+  mention, message;
+  factory Kind.fromJson(Object? j) => switch (j) {
+    'mention' => mention,
+    _ => message,
+  };
+  String toJson() => this == mention ? 'mention' : 'message';
+}
+''');
+
+  Future<void> test_a_parse_function_and_a_closure_in_it_are_the_wire() =>
+      assertNoDiagnostics('''
+int? parseLevel(String s) => s == 'high' ? 2 : null;
+List<bool> tryParseAll(List<String> l) => [for (final s in l) s == 'on'];
+bool Function(String) parseFlag() => (s) => s == 'yes';
+''');
+
+  Future<void> test_a_wire_word_inside_a_name_is_not_one() => lintsOn(
+    "bool isMention(String kind) => kind == 'mention';\n",
+    ["kind == 'mention'"],
+  );
+
+  Future<void> test_a_reason_on_the_line() => assertNoDiagnostics(
+    "bool f(String k) => k == 'x'; // wire-ok: a CLI flag\n",
+  );
+
+  Future<void> test_a_reason_on_the_line_above_a_switch() =>
+      assertNoDiagnostics('''
+int f(String k) =>
+    // wire-ok: the header's own spelling
+    switch (k) { 'a' => 1, _ => 0 };
+''');
+
+  Future<void> test_a_cast_ok_is_not_a_wire_ok() => lintsOn(
+    "bool f(String k) => k == 'x'; // cast-ok: wrong marker\n",
+    ["k == 'x'"],
+  );
+
+  Future<void> test_a_marker_needs_a_reason() =>
+      lintsOn("bool f(String k) => k == 'x'; // wire-ok:\n", ["k == 'x'"]);
+
+  Future<void> test_not_in_test_dir() => silentInTestDir(_equals);
 }
