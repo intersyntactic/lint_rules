@@ -23,6 +23,7 @@ final List<AnalysisRule> rules = [
   NoDefaultOnClosedType(),
   NoIgnoreComment(),
   NoStringLiteralCompare(),
+  NoVisibleForTesting(),
 ];
 
 // ---------------------------------------------------------------- dynamic
@@ -506,4 +507,48 @@ class _NoStringCompare extends SimpleAstVisitor<void> {
     node.expression,
     [for (final c in node.cases) c.guardedPattern.pattern],
   );
+}
+
+// ---------------------------------------------------------------- tests
+
+/// An annotation that resolves to `visibleForTesting` from `package:meta`
+/// (which Flutter's `foundation` re-exports). The analyzer reports only a
+/// call to such a member from outside the tests, never the annotation, so a
+/// member opened for a test alone goes unnoticed.
+class NoVisibleForTesting extends AnalysisRule {
+  static const code = LintCode(
+    'no_visible_for_testing',
+    "Don't open a member to tests with `@visibleForTesting`.",
+    correctionMessage:
+        'Give the class what it depends on (a clock, a process launcher, a '
+        'client) as an argument with the real one as the default, so the '
+        'test passes a fake and drives the path the app runs.',
+  );
+
+  NoVisibleForTesting()
+    : super(
+        name: 'no_visible_for_testing',
+        description: 'No @visibleForTesting.',
+      );
+
+  @override
+  LintCode get diagnosticCode => code;
+
+  @override
+  void registerNodeProcessors(RuleVisitorRegistry r, RuleContext c) {
+    if (c.isInTestDirectory) return;
+    r.addAnnotation(this, _NoVisibleForTesting(this));
+  }
+}
+
+class _NoVisibleForTesting extends SimpleAstVisitor<void> {
+  _NoVisibleForTesting(this.rule);
+  final AnalysisRule rule;
+
+  @override
+  void visitAnnotation(Annotation node) {
+    if (node.elementAnnotation?.isVisibleForTesting ?? false) {
+      rule.reportAtNode(node);
+    }
+  }
 }

@@ -10,6 +10,8 @@ void main() {
     defineReflectiveTests(NoDefaultOnClosedTypeTest);
     defineReflectiveTests(NoIgnoreCommentTest);
     defineReflectiveTests(NoStringLiteralCompareTest);
+    defineReflectiveTests(NoVisibleForTestingTest);
+    defineReflectiveTests(NoVisibleForTestingFromFlutterTest);
   });
 }
 
@@ -425,4 +427,77 @@ int f(String k) =>
       lintsOn("bool f(String k) => k == 'x'; // wire-ok:\n", ["k == 'x'"]);
 
   Future<void> test_not_in_test_dir() => silentInTestDir(_equals);
+}
+
+@reflectiveTest
+class NoVisibleForTestingTest extends _RuleTest {
+  @override
+  AbstractAnalysisRule get underTest => NoVisibleForTesting();
+
+  @override
+  bool get addMetaPackageDep => true;
+
+  static const _member = '''
+import 'package:meta/meta.dart';
+class C {
+  @visibleForTesting
+  int count = 0;
+}
+''';
+
+  Future<void> test_on_a_member() => lintsOn(_member, ['@visibleForTesting']);
+
+  Future<void> test_on_a_top_level_function() => lintsOn(
+    '''
+import 'package:meta/meta.dart';
+@visibleForTesting
+int f() => 0;
+''',
+    ['@visibleForTesting'],
+  );
+
+  Future<void> test_with_a_prefix() => lintsOn(
+    '''
+import 'package:meta/meta.dart' as meta;
+@meta.visibleForTesting
+int f() => 0;
+''',
+    ['@meta.visibleForTesting'],
+  );
+
+  Future<void> test_other_annotations_are_fine() => assertNoDiagnostics('''
+import 'package:meta/meta.dart';
+class C {
+  @protected
+  int count = 0;
+}
+''');
+
+  Future<void> test_one_of_the_same_name_elsewhere_is_not_it() =>
+      assertNoDiagnostics('''
+const visibleForTesting = Object();
+@visibleForTesting
+int f() => 0;
+''');
+
+  Future<void> test_not_in_test_dir() => silentInTestDir(_member);
+}
+
+/// A Flutter app reaches it through `foundation`, which re-exports it.
+@reflectiveTest
+class NoVisibleForTestingFromFlutterTest extends _RuleTest {
+  @override
+  AbstractAnalysisRule get underTest => NoVisibleForTesting();
+
+  @override
+  bool get addFlutterPackageDep => true;
+
+  Future<void> test_through_foundation() => lintsOn(
+    '''
+import 'package:flutter/foundation.dart';
+@visibleForTesting
+int f() => 0;
+''',
+    ['@visibleForTesting'],
+  );
 }
