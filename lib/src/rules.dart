@@ -22,6 +22,7 @@ final List<AnalysisRule> rules = [
   NoCastFromUntyped(),
   NoDefaultOnClosedType(),
   NoIgnoreComment(),
+  NoJsonObjectCheck(),
   NoStringLiteralCompare(),
   NoVisibleForTesting(),
 ];
@@ -72,8 +73,8 @@ class NoCastFromUntyped extends AnalysisRule {
     'no_cast_from_untyped',
     'Narrowing an untyped value with `as` or `.cast`.',
     correctionMessage:
-        'Use a pattern (`case final String s`) or JsonFields, which name the '
-        'field when it is wrong. If a cast is really right here, write '
+        'Use a pattern (`case final String s`) or a JsonObject reader, which '
+        'names the field when it is wrong. If a cast is really right here, write '
         '`// cast-ok: <why>` on or above the line.',
   );
 
@@ -354,6 +355,122 @@ class _NoIgnore extends SimpleAstVisitor<void> {
     for (final (:comment, before: _) in _comments(node)) {
       if (_ignore.hasMatch(comment.lexeme)) rule.reportAtToken(comment);
     }
+  }
+}
+
+// ---------------------------------------------------------------- JSON objects
+
+/// A type test against `JsonObject` anywhere but the file that defines it:
+/// `as`, `is`, a pattern typed with it, or `whereType`/`cast` with it as the
+/// type argument, including inside another type (`List<JsonObject>`).
+///
+/// JsonObject is an extension type, so at runtime each of these tests the
+/// map inside: the check its doors make, made again somewhere else. A test
+/// that can fail only on null (`case final JsonObject j` on a `JsonObject?`)
+/// says nothing about the map and is not reported.
+class NoJsonObjectCheck extends AnalysisRule {
+  static const code = LintCode(
+    'no_json_object_check',
+    'A type test against JsonObject checks the map again.',
+    correctionMessage:
+        'Get a JsonObject through a door: JsonObject.decode(text) for wire '
+        'text, JsonObject.parse(value) for a decoded value (null when it is '
+        'not an object), or .object(key) or .objects(key) for one inside '
+        'another.',
+  );
+
+  NoJsonObjectCheck()
+    : super(
+        name: 'no_json_object_check',
+        description: 'No as, is or pattern on JsonObject outside json.dart.',
+      );
+
+  @override
+  LintCode get diagnosticCode => code;
+
+  @override
+  void registerNodeProcessors(RuleVisitorRegistry r, RuleContext c) {
+    if (c.isInTestDirectory) return;
+    if (c.libraryElement?.uri == _jsonLibrary) return;
+    r.addNamedType(this, _NoJsonObjectCheck(this, c.typeSystem));
+  }
+}
+
+/// The library that defines JsonObject, and the only one whose doors test
+/// for it.
+final _jsonLibrary = Uri.parse('package:anthropic_client/src/json.dart');
+
+bool _isJsonObject(DartType? t) => switch (t?.element) {
+  final ExtensionTypeElement e =>
+    e.name == 'JsonObject' && e.library.uri == _jsonLibrary,
+  _ => false,
+};
+
+/// The type of each element [t] iterates, or null when it is not iterable.
+DartType? _elementOf(DartType? t) => switch (t) {
+  InterfaceType(isDartCoreIterable: true, :final typeArguments) =>
+    typeArguments.first,
+  InterfaceType(:final allSupertypes) => [
+    for (final s in allSupertypes)
+      if (s.isDartCoreIterable) s.typeArguments.first,
+  ].firstOrNull,
+  _ => null,
+};
+
+class _NoJsonObjectCheck extends SimpleAstVisitor<void> {
+  _NoJsonObjectCheck(this.rule, this.types);
+  final AnalysisRule rule;
+  final TypeSystem types;
+
+  @override
+  void visitNamedType(NamedType node) {
+    if (!_isJsonObject(node.type)) return;
+    // Out of every type this one is an argument of, to the whole type and
+    // the node that uses it.
+    AstNode at = node;
+    var whole = node;
+    while (true) {
+      final p = at.parent;
+      if (p is TypeArgumentList) {
+        at = p;
+      } else if (p is NamedType && at is TypeArgumentList) {
+        at = p;
+        whole = p;
+      } else {
+        break;
+      }
+    }
+    // What the test is made on, when the node is a type test at all.
+    final (test, value) = switch (at.parent) {
+      AsExpression(:final expression, :final type) when type == whole => (
+        true,
+        expression.staticType,
+      ),
+      IsExpression(:final expression, :final type) when type == whole => (
+        true,
+        expression.staticType,
+      ),
+      final DeclaredVariablePattern p => (true, p.matchedValueType),
+      final WildcardPattern p => (true, p.matchedValueType),
+      final ObjectPattern p => (true, p.matchedValueType),
+      final CastPattern p => (true, p.matchedValueType),
+      MethodInvocation(:final methodName, :final realTarget)
+          when at is TypeArgumentList &&
+              (methodName.name == 'whereType' || methodName.name == 'cast') =>
+        (true, _elementOf(realTarget?.staticType)),
+      _ => (false, null),
+    };
+    if (!test) return;
+    final tested = whole.type;
+    if (value != null &&
+        tested != null &&
+        types.isSubtypeOf(
+          types.promoteToNonNull(value),
+          types.promoteToNonNull(tested),
+        )) {
+      return;
+    }
+    rule.reportAtNode(whole);
   }
 }
 
