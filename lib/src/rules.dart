@@ -12,6 +12,7 @@ import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/dart/element/type_system.dart';
 import 'package:analyzer/error/error.dart';
@@ -360,20 +361,31 @@ class _NoIgnore extends SimpleAstVisitor<void> {
 
 // ---------------------------------------------------------------- JSON objects
 
-/// A type test against `JsonObject` anywhere but the library that declares
-/// it: `as`, `is`, a pattern typed with it, or `whereType`/`cast` with it as
-/// the type argument, including inside another type (`List<JsonObject>`).
-/// It is known by name, an extension type called `JsonObject`, so the rule
-/// holds wherever the type is declared, in this repo or a package.
+/// A type test that checks for a JSON object outside the library that
+/// declares `JsonObject`: `as`, `is`, a pattern typed with the type, or
+/// `whereType`/`cast` with it as the type argument, including inside another
+/// type (`List<JsonObject>`). The types are `JsonObject` and its
+/// representation, a `Map` with `String` keys and `Object?` or `dynamic`
+/// values, however it is spelled (a typedef of it is the same type).
 ///
-/// JsonObject is an extension type, so at runtime each of these tests the
-/// map inside: the check its doors make, made again somewhere else. A test
-/// that can fail only on null (`case final JsonObject j` on a `JsonObject?`)
-/// says nothing about the map and is not reported.
+/// JsonObject is an extension type, so at runtime a test against it tests
+/// the map inside: the check its doors make, made again somewhere else. A
+/// test against the bare map is the same check, and `JsonObject.of` would
+/// then wrap what it found. A test that can fail only on null (`case final
+/// JsonObject j` on a `JsonObject?`) says nothing about the map and is not
+/// reported.
+///
+/// JsonObject is known by name, an extension type called `JsonObject`, so
+/// the rule holds wherever it is declared, in this repo or a package. The
+/// bare map is reported only in a library that can see a JsonObject: one
+/// whose package, through its own imports, imports a library exporting one.
+/// Elsewhere (a package that does not depend on it) a string-keyed map is
+/// all there is. That scope is found from the imports themselves, not from
+/// a list of package names, so it follows the type wherever it moves.
 class NoJsonObjectCheck extends AnalysisRule {
   static const code = LintCode(
     'no_json_object_check',
-    'A type test against JsonObject checks the map again.',
+    'A type test against {0} checks for a JSON object again.',
     correctionMessage:
         'Get a JsonObject through a door: JsonObject.decode(text) for wire '
         'text, JsonObject.parse(value) for a decoded value (null when it is '
@@ -384,7 +396,7 @@ class NoJsonObjectCheck extends AnalysisRule {
   NoJsonObjectCheck()
     : super(
         name: 'no_json_object_check',
-        description: 'No as, is or pattern on JsonObject outside json.dart.',
+        description: 'No as, is or pattern on JsonObject or its map.',
       );
 
   @override
@@ -393,19 +405,65 @@ class NoJsonObjectCheck extends AnalysisRule {
   @override
   void registerNodeProcessors(RuleVisitorRegistry r, RuleContext c) {
     if (c.isInTestDirectory) return;
+    final library = c.libraryElement;
+    // The library that declares JsonObject is the one whose doors check.
+    if (library == null ||
+        library.extensionTypes.any((e) => e.name == 'JsonObject')) {
+      return;
+    }
     r.addNamedType(
       this,
-      _NoJsonObjectCheck(this, c.typeSystem, c.libraryElement),
+      _NoJsonObjectCheck(
+        this,
+        c.typeSystem,
+        maps: _seesJsonObject(library, c.package?.root.path),
+      ),
     );
   }
 }
 
-/// The JsonObject [t] names, or null. The library that declares it is the
-/// one whose doors make the check, so it may test for it.
-ExtensionTypeElement? _jsonObject(DartType? t) => switch (t?.element) {
-  final ExtensionTypeElement e when e.name == 'JsonObject' => e,
-  _ => null,
+/// Whether [t] is a JsonObject.
+bool _isJsonObject(DartType? t) => switch (t?.element) {
+  final ExtensionTypeElement e => e.name == 'JsonObject',
+  _ => false,
 };
+
+/// Whether [t] is what a JsonObject holds: a map with `String` keys and
+/// `Object?` or `dynamic` values.
+bool _isJsonMap(DartType? t) => switch (t) {
+  InterfaceType(isDartCoreMap: true, typeArguments: [final k, final v]) =>
+    k.isDartCoreString &&
+        (v is DynamicType ||
+            (v.isDartCoreObject &&
+                v.nullabilitySuffix == NullabilitySuffix.question)),
+  _ => false,
+};
+
+/// Whether [library] can name a JsonObject: it, or a library of its own
+/// package (under [root]) that it imports directly or through others,
+/// imports a library whose exports include one.
+bool _seesJsonObject(LibraryElement library, String? root) {
+  bool own(LibraryElement l) =>
+      root != null && l.firstFragment.source.fullName.startsWith(root);
+  final seen = <LibraryElement>{};
+  final todo = [library];
+  while (todo.isNotEmpty) {
+    final l = todo.removeLast();
+    if (!seen.add(l)) continue;
+    for (final f in l.fragments) {
+      for (final imported in f.importedLibraries) {
+        if (_isJsonObjectElement(imported.exportNamespace.get2('JsonObject'))) {
+          return true;
+        }
+        if (own(imported)) todo.add(imported);
+      }
+    }
+  }
+  return false;
+}
+
+bool _isJsonObjectElement(Element? e) =>
+    e is ExtensionTypeElement && e.name == 'JsonObject';
 
 /// The type of each element [t] iterates, or null when it is not iterable.
 DartType? _elementOf(DartType? t) => switch (t) {
@@ -419,15 +477,16 @@ DartType? _elementOf(DartType? t) => switch (t) {
 };
 
 class _NoJsonObjectCheck extends SimpleAstVisitor<void> {
-  _NoJsonObjectCheck(this.rule, this.types, this.library);
+  _NoJsonObjectCheck(this.rule, this.types, {required this.maps});
   final AnalysisRule rule;
   final TypeSystem types;
-  final LibraryElement? library;
+
+  /// Whether a test against the bare map is reported too.
+  final bool maps;
 
   @override
   void visitNamedType(NamedType node) {
-    final declared = _jsonObject(node.type);
-    if (declared == null || declared.library == library) return;
+    if (!_isJsonObject(node.type) && !(maps && _isJsonMap(node.type))) return;
     // Out of every type this one is an argument of, to the whole type and
     // the node that uses it.
     AstNode at = node;
@@ -473,7 +532,7 @@ class _NoJsonObjectCheck extends SimpleAstVisitor<void> {
         )) {
       return;
     }
-    rule.reportAtNode(whole);
+    rule.reportAtNode(whole, arguments: [tested?.getDisplayString() ?? '']);
   }
 }
 
