@@ -360,9 +360,11 @@ class _NoIgnore extends SimpleAstVisitor<void> {
 
 // ---------------------------------------------------------------- JSON objects
 
-/// A type test against `JsonObject` anywhere but the file that defines it:
-/// `as`, `is`, a pattern typed with it, or `whereType`/`cast` with it as the
-/// type argument, including inside another type (`List<JsonObject>`).
+/// A type test against `JsonObject` anywhere but the library that declares
+/// it: `as`, `is`, a pattern typed with it, or `whereType`/`cast` with it as
+/// the type argument, including inside another type (`List<JsonObject>`).
+/// It is known by name, an extension type called `JsonObject`, so the rule
+/// holds wherever the type is declared, in this repo or a package.
 ///
 /// JsonObject is an extension type, so at runtime each of these tests the
 /// map inside: the check its doors make, made again somewhere else. A test
@@ -391,19 +393,18 @@ class NoJsonObjectCheck extends AnalysisRule {
   @override
   void registerNodeProcessors(RuleVisitorRegistry r, RuleContext c) {
     if (c.isInTestDirectory) return;
-    if (c.libraryElement?.uri == _jsonLibrary) return;
-    r.addNamedType(this, _NoJsonObjectCheck(this, c.typeSystem));
+    r.addNamedType(
+      this,
+      _NoJsonObjectCheck(this, c.typeSystem, c.libraryElement),
+    );
   }
 }
 
-/// The library that defines JsonObject, and the only one whose doors test
-/// for it.
-final _jsonLibrary = Uri.parse('package:anthropic_client/src/json.dart');
-
-bool _isJsonObject(DartType? t) => switch (t?.element) {
-  final ExtensionTypeElement e =>
-    e.name == 'JsonObject' && e.library.uri == _jsonLibrary,
-  _ => false,
+/// The JsonObject [t] names, or null. The library that declares it is the
+/// one whose doors make the check, so it may test for it.
+ExtensionTypeElement? _jsonObject(DartType? t) => switch (t?.element) {
+  final ExtensionTypeElement e when e.name == 'JsonObject' => e,
+  _ => null,
 };
 
 /// The type of each element [t] iterates, or null when it is not iterable.
@@ -418,13 +419,15 @@ DartType? _elementOf(DartType? t) => switch (t) {
 };
 
 class _NoJsonObjectCheck extends SimpleAstVisitor<void> {
-  _NoJsonObjectCheck(this.rule, this.types);
+  _NoJsonObjectCheck(this.rule, this.types, this.library);
   final AnalysisRule rule;
   final TypeSystem types;
+  final LibraryElement? library;
 
   @override
   void visitNamedType(NamedType node) {
-    if (!_isJsonObject(node.type)) return;
+    final declared = _jsonObject(node.type);
+    if (declared == null || declared.library == library) return;
     // Out of every type this one is an argument of, to the whole type and
     // the node that uses it.
     AstNode at = node;
