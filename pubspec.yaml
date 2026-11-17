@@ -1,12 +1,12 @@
-name: lint_rules
+name: is_lint_rules
 description: >-
-  Analyzer plugin that checks AGENTS.md's "Writing Dart" rules: no `dynamic`,
-  no `as` on an untyped value, no catch-all on a closed type, no `// ignore:`.
-publish_to: none
+  Analyzer plugin for stricter Dart: no `dynamic`, no `as` on an untyped
+  value, no catch-all on a closed type, no `// ignore:`, and more.
+version: 0.1.0
+repository: https://github.com/intersyntactic/lint_rules
 
-# Not a workspace member. The analysis server resolves a plugin in a package
-# of its own that depends on this one, so this resolves on its own too, and
-# its analyzer pin stays out of the workspace's solve.
+# The analysis server resolves a plugin in a package of its own that depends
+# on this one, so these exact pins never enter a using package's solve.
 
 environment:
   sdk: ^3.13.0
@@ -16,7 +16,6 @@ dependencies:
   analyzer: 14.6.0
 
 dev_dependencies:
-  analyzer_testing: 0.4.4
+  lints: ^6.1.0
   test: ^1.26.0
-  test_reflective_loader: ^0.2.3
   yaml: ^3.1.4

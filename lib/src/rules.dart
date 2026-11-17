@@ -1,8 +1,9 @@
-/// The rules of AGENTS.md's "Writing Dart" that a plugin can check, or the
-/// part of one it can see.
+/// The rules for stricter Dart that a plugin can check, or the part of one it
+/// can see.
 ///
 /// None of them report in a package's test directories (`test/`,
-/// `integration_test/`, `test_driver/`): see RULINGS.md.
+/// `integration_test/`, `test_driver/`): a test builds bad input on purpose,
+/// and casting a fixture is how it says what it expects.
 library;
 
 import 'package:analyzer/analysis_rule/analysis_rule.dart';
@@ -322,7 +323,7 @@ class _NoDefault extends SimpleAstVisitor<void> {
 // ---------------------------------------------------------------- ignores
 
 /// Any `// ignore:` or `// ignore_for_file:`, including the
-/// `// ignore: lint_rules/<rule>` that would silence these rules.
+/// `// ignore: is_lint_rules/<rule>` that would silence these rules.
 class NoIgnoreComment extends AnalysisRule {
   static const code = LintCode(
     'no_ignore_comment',
@@ -376,7 +377,7 @@ class _NoIgnore extends SimpleAstVisitor<void> {
 /// reported.
 ///
 /// JsonObject is known by name, an extension type called `JsonObject`, so
-/// the rule holds wherever it is declared, in this repo or a package. The
+/// the rule holds wherever it is declared, in the package or one it uses. The
 /// bare map is reported only in a library that can see a JsonObject: one
 /// whose package, through its own imports, imports a library exporting one.
 /// Elsewhere (a package that does not depend on it) a string-keyed map is

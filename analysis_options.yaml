@@ -1,0 +1,16 @@
+
+# This package's own rules, run on itself. Its diagnostics are infos, so
+# `dart analyze --fatal-infos` is what fails on them.
+plugins:
+  is_lint_rules:
+    path: .
+    diagnostics:
+      no_dynamic: true
+      no_cast_from_untyped: true
+      no_default_on_closed_type: true
+      no_ignore_comment: true
+      no_json_object_check: true
+      # The analyzer names what it parsed with strings (`dynamic`, `cast`),
+      # so this code compares against them where it reads that wire.
+      no_string_literal_compare: false
+      no_visible_for_testing: true
