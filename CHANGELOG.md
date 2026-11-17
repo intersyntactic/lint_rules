@@ -1,3 +1,9 @@
+## 0.1.1
+
+- The README says where `plugins:` goes (the top level, not under
+  `analyzer:`, where the rules never run) and gives a probe that shows the
+  plugin ran.
+
 ## 0.1.0
 
 - First release: seven rules, each off until an `analysis_options.yaml`

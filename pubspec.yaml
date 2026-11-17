@@ -2,7 +2,7 @@ name: is_lint_rules
 description: >-
   Analyzer plugin for stricter Dart: no `dynamic`, no `as` on an untyped
   value, no catch-all on a closed type, no `// ignore:`, and more.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/intersyntactic/lint_rules
 
 # The analysis server resolves a plugin in a package of its own that depends
