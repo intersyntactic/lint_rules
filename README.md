@@ -7,9 +7,14 @@ of an enum, an `// ignore:` that silences the analyzer.
 
 ## Using it
 
-Add it under `plugins:` in `analysis_options.yaml`. You don't add it to
+Add a `plugins:` section to `analysis_options.yaml`. You don't add it to
 `pubspec.yaml`: the analysis server resolves a plugin in a package of its own,
 so its `analyzer` pin never enters your solve.
+
+`plugins:` goes at the top level, at column 0 beside `analyzer:` and
+`linter:`. Nested under `analyzer:` it is the old plugin system: the rules
+never run, `dart analyze` warns `analysis_options_deprecated_plugins`, and
+nothing else says so.
 
 Every rule is a lint, off until you turn it on, so name each one under
 `diagnostics:`:
@@ -33,7 +38,16 @@ The analyzer says nothing about a rule name it does not know, so a misspelled
 Copy the names from here.
 
 Restart the analysis server after changing the plugin's entry. `dart analyze`
-reports the rules too.
+reports the rules too, as infos, so pass `--fatal-infos` for them to fail it.
+
+"No issues found" can't tell you the plugin ran. To check that it does, add
+this to any file under `lib/`:
+
+```dart
+dynamic probe() => 0;
+```
+
+`dart analyze` must report it as `no_dynamic`. Delete it once it does.
 
 No rule reports in a package's test directories (`test/`, `integration_test/`,
 `test_driver/`): a test builds bad input on purpose, and casting a fixture is
