@@ -7,10 +7,10 @@ import 'src/rules.dart';
 final plugin = LintRulesPlugin();
 
 /// Every rule is a lint rule, so it is off until an `analysis_options.yaml`
-/// turns it on under `plugins: lint_rules: diagnostics:`.
+/// turns it on under `plugins: is_lint_rules: diagnostics:`.
 class LintRulesPlugin extends Plugin {
   @override
-  String get name => 'lint_rules';
+  String get name => 'is_lint_rules';
 
   @override
   void register(PluginRegistry registry) =>
