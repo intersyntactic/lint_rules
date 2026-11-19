@@ -1,3 +1,8 @@
+## 0.1.2
+
+- Built on analyzer 14.7.0 and analysis_server_plugin 0.3.26, still pinned
+  exactly.
+
 ## 0.1.1
 
 - The README says where `plugins:` goes (the top level, not under
