@@ -555,9 +555,9 @@ class NoStringLiteralCompare extends AnalysisRule {
     'no_string_literal_compare',
     "Comparing a string with '{0}': a closed set spelled as strings.",
     correctionMessage:
-        'Give the set a type (an enum, a sealed class or an extension type) '
-        'and parse it once, in fromJson or a parse. If this is the wire, write '
-        '`// wire-ok: <why>` on or above the line.',
+        'Give the set a type (an enum, or a sealed class when its cases carry '
+        'data) and parse it once, in fromJson or a parse. If this is the wire, '
+        'write `// wire-ok: <why>` on or above the line.',
   );
 
   NoStringLiteralCompare()
