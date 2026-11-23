@@ -98,8 +98,9 @@ string-keyed map is all there is.
 
 A string compared with a string literal (`kind == 'mention'`), or a switch
 whose cases are string literals. The literals are a closed set spelled as
-strings; give the set a type (an enum, a sealed class or an extension type) and
-parse it once. Not reported inside the members that are the wire (`fromJson`,
+strings; give the set a type (an enum, or a sealed class when its cases carry
+data) and parse it once. Not an extension type: any `String` casts to one and
+skips the parse. Not reported inside the members that are the wire (`fromJson`,
 `toJson`, `fromWire`, `toWire`, and any `parse…` or `tryParse…`), against `''`,
 or with a reason:
 
