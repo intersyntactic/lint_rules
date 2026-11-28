@@ -1,3 +1,10 @@
+## 0.1.4
+
+- `no_json_object_check` knows `JsonObject` as a class too, not only as an
+  extension type, so it keeps reporting once `checked_json` makes it a class.
+  Against a class, a type test on a decoded value never passes.
+- Tests for `no_json_object_check` against both shapes of `JsonObject`.
+
 ## 0.1.3
 
 - `no_string_literal_compare` advises an enum, or a sealed class when the

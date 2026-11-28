@@ -369,24 +369,28 @@ class _NoIgnore extends SimpleAstVisitor<void> {
 /// representation, a `Map` with `String` keys and `Object?` or `dynamic`
 /// values, however it is spelled (a typedef of it is the same type).
 ///
-/// JsonObject is an extension type, so at runtime a test against it tests
-/// the map inside: the check its doors make, made again somewhere else. A
-/// test against the bare map is the same check, and `JsonObject.of` would
-/// then wrap what it found. A test that can fail only on null (`case final
-/// JsonObject j` on a `JsonObject?`) says nothing about the map and is not
-/// reported.
+/// A JsonObject comes only through its doors, which check. When JsonObject
+/// is an extension type, a test against it tests the map inside: the check
+/// the doors make, made again somewhere else. When it is a class, a test
+/// against it on a decoded value never passes, since `jsonDecode` builds
+/// plain maps: `x is JsonObject` is false and `x as JsonObject` throws.
+/// Either way a test against the bare map is the doors' check made again,
+/// and a JsonObject passes it too. A test that can fail only on null (`case
+/// final JsonObject j` on a `JsonObject?`) says nothing about the map and is
+/// not reported.
 ///
-/// JsonObject is known by name, an extension type called `JsonObject`, so
-/// the rule holds wherever it is declared, in the package or one it uses. The
-/// bare map is reported only in a library that can see a JsonObject: one
-/// whose package, through its own imports, imports a library exporting one.
-/// Elsewhere (a package that does not depend on it) a string-keyed map is
-/// all there is. That scope is found from the imports themselves, not from
-/// a list of package names, so it follows the type wherever it moves.
+/// JsonObject is known by name, an extension type or a class called
+/// `JsonObject`, so the rule holds wherever it is declared, in the package or
+/// one it uses. The bare map is reported only in a library that can see a
+/// JsonObject: one whose package, through its own imports, imports a library
+/// exporting one. Elsewhere (a package that does not depend on it) a
+/// string-keyed map is all there is. That scope is found from the imports
+/// themselves, not from a list of package names, so it follows the type
+/// wherever it moves.
 class NoJsonObjectCheck extends AnalysisRule {
   static const code = LintCode(
     'no_json_object_check',
-    'A type test against {0} checks for a JSON object again.',
+    'A type test against {0}, where a JsonObject door belongs.',
     correctionMessage:
         'Get a JsonObject through a door: JsonObject.decode(text) for wire '
         'text, JsonObject.parse(value) for a decoded value (null when it is '
@@ -409,7 +413,8 @@ class NoJsonObjectCheck extends AnalysisRule {
     final library = c.libraryElement;
     // The library that declares JsonObject is the one whose doors check.
     if (library == null ||
-        library.extensionTypes.any((e) => e.name == 'JsonObject')) {
+        library.extensionTypes.any(_isJsonObjectElement) ||
+        library.classes.any(_isJsonObjectElement)) {
       return;
     }
     r.addNamedType(
@@ -424,10 +429,7 @@ class NoJsonObjectCheck extends AnalysisRule {
 }
 
 /// Whether [t] is a JsonObject.
-bool _isJsonObject(DartType? t) => switch (t?.element) {
-  final ExtensionTypeElement e => e.name == 'JsonObject',
-  _ => false,
-};
+bool _isJsonObject(DartType? t) => _isJsonObjectElement(t?.element);
 
 /// Whether [t] is what a JsonObject holds: a map with `String` keys and
 /// `Object?` or `dynamic` values.
@@ -463,8 +465,10 @@ bool _seesJsonObject(LibraryElement library, String? root) {
   return false;
 }
 
+/// Whether [e] declares a JsonObject: an extension type or a class of that
+/// name.
 bool _isJsonObjectElement(Element? e) =>
-    e is ExtensionTypeElement && e.name == 'JsonObject';
+    (e is ExtensionTypeElement || e is ClassElement) && e?.name == 'JsonObject';
 
 /// The type of each element [t] iterates, or null when it is not iterable.
 DartType? _elementOf(DartType? t) => switch (t) {

@@ -86,11 +86,14 @@ comments count: the analyzer obeys `/// ignore:` too.
 
 ### `no_json_object_check`
 
-For code that reads JSON through an extension type named `JsonObject`: an
-`as`, `is`, typed pattern, `whereType` or `cast` against `JsonObject` or the
-`Map<String, Object?>` it wraps, outside the library that declares it. At
-runtime a test against an extension type tests the map inside, so it repeats
-the check `JsonObject`'s constructors already made. Reported only in a library
+For code that reads JSON through a type named `JsonObject`, an extension type
+or a class: an `as`, `is`, typed pattern, `whereType` or `cast` against
+`JsonObject` or a `Map<String, Object?>`, outside the library that declares
+it. A JsonObject comes only through its constructors, which check. Against an
+extension type, a test repeats that check on the map inside. Against a class,
+a test on a decoded value never passes: `jsonDecode` builds plain maps, so
+`is` is false and `as` throws. A test against the bare map repeats the
+constructors' check either way. Reported only in a library
 that can see a `JsonObject` through its package's imports; elsewhere a
 string-keyed map is all there is.
 
